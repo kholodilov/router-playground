@@ -6,41 +6,53 @@ import scala.util._
 
 class FutureAsyncAwait {
 
-    def calcV1(variables: Map[String, Promise[Double]]): Unit = {
-        async { 
-            await { variables("V2").future } + await { variables("V3").future }
-        }.onComplete { v => variables("V1").tryComplete(v) }
+    def calcV1(variables: Map[String, Promise[Double]]): Future[Double] = async { 
+        await { variables("V2").future } + await { variables("V3").future }
     }
 
-    def calcV2(variables: Map[String, Promise[Double]]): Unit = variables("V2").success(1.0)
+    def calcV2(variables: Map[String, Promise[Double]]): Future[Double] = Future { 1.0 }
 
-    def calcV3(variables: Map[String, Promise[Double]]): Unit = variables("V3").success(2.0)
+    def calcV3(variables: Map[String, Promise[Double]]): Future[Double] = Future { 2.0 }
 
-    def calcV4(variables: Map[String, Promise[Double]]): Unit = {
-        async { 
-            await { variables("V5").future } + 1.0
-        }.onComplete { v => variables("V4").tryComplete(v) }
+    def calcV4(variables: Map[String, Promise[Double]]): Future[Double] = async { 
+        await { variables("V5").future } + 1.0
     }
 
-    def calcV5(variables: Map[String, Promise[Double]]): Unit = variables("V5").failure(new Exception("V5 failed"))
+    def calcV5(variables: Map[String, Promise[Double]]): Future[Double] = Future { throw new Exception("V5 failed") }
 
-    val calculators = Map[String, (Map[String, Promise[Double]] => Unit)](
+    def calcV6(variables: Map[String, Promise[Double]]): Future[Double] = Future { 
+        blocking { Thread.sleep(5000) }
+        666.0
+    }
+
+    val calculators = Map[String, (Map[String, Promise[Double]] => Future[Double])](
         "V1" -> calcV1,
         "V2" -> calcV2,
         "V3" -> calcV3,
         "V4" -> calcV4,
-        "V5" -> calcV5
+        "V5" -> calcV5,
+        "V6" -> calcV6
     )
 
+    def createTimeout(t: Duration): Future[Unit] = Future {
+      blocking { Thread.sleep(t.toMillis) }
+      throw new TimeoutException()
+    }
+
     def test(): Unit = {
+        
         val variables: Map[String, Promise[Double]] = calculators.keys.map { v => v -> Promise[Double]() }.toMap
+
+        val timeout = createTimeout(1 seconds)
         variables.foreach { case (name, promise) =>
-            promise.future.onComplete { value => println(name + " result: " + value) }
+            Future.firstCompletedOf(Seq(promise.future, timeout)).onComplete { value => println(name + " result: " + value) }
         }
-        calculators.foreach { case (name, calculator) => 
-            calculator(variables)
+
+        calculators.foreach { case (name, calculate) => 
+            variables(name).completeWith(calculate(variables))
         }
-        println(Await.result(variables("V1").future, 1 second))
+
+        println("bootstrap finished")
     }
 
 }
