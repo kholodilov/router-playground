@@ -7,6 +7,8 @@ import scala.collection.mutable.ListBuffer
 
 class FutureAsyncAwait {
 
+    import Common._
+
     def calcV1(variables: Map[String, Promise[Double]]): Future[Double] = async { 
         await { variables("V2").future } + await { variables("V3").future }
     }
@@ -39,25 +41,6 @@ class FutureAsyncAwait {
     def timeout(t: Duration): Future[Unit] = Future {
       blocking { Thread.sleep(t.toMillis) }
       throw new TimeoutException()
-    }
-
-    def tryPromise[T](p: Promise[T]): Promise[Try[T]] = {
-        val tryP = Promise[Try[T]]()
-        p.future.onComplete { value: Try[T] =>
-            tryP.success(value)
-        }
-        tryP
-    }
-
-    def allPromises[K, V](mp: Map[K, Promise[V]]): Future[Map[K, Try[V]]] = async {
-        var entries = mp.toList
-        val result = new ListBuffer[(K, Try[V])]()
-        while (entries != Nil) {
-            val (key, promise) = entries.head
-            result += new Tuple2(key, await { tryPromise(promise).future })
-            entries = entries.tail
-        }
-        result.toMap
     }
 
     def test(): Unit = {
