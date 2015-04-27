@@ -30,12 +30,37 @@ class Actors {
         )
 
         val requestHandler = system.actorOf(Props(new RequestHandler(strategies)), "request-handler")
-        implicit val timeout = Timeout(5 seconds)
-        val result = Try(Await.result(requestHandler ? VariablesRequest(List("V1", "V2", "V4", "V6")), timeout.duration))
-        println("Result: " + result)
+        val resultsCollector = system.actorOf(Props(new ResultsCollector(List("V1", "V2", "V4", "V6"), requestHandler)), "results-collector")
+
+        Thread.sleep(4000)
 
         system.shutdown()
     }
+}
+
+case object Finished
+
+class ResultsCollector(variables: List[String], requestHandler: ActorRef) extends Actor with ActorLogging {
+
+    val results = mutable.HashMap.empty[String, Double]
+
+    requestHandler ! VariablesRequest(variables)
+
+    import context.dispatcher
+    context.system.scheduler.scheduleOnce(3 seconds, self, Finished)
+
+    def receive = LoggingReceive {
+        case VariableResult(name, value) => {
+            results += (name -> value)
+            if (results.size == variables.size) {
+                self ! Finished
+            }
+        }
+        case Finished =>
+            println(results)
+            context.stop(self)
+    }
+
 }
 
 class RequestHandler(strategies: Map[String, VariableStrategy]) extends Actor with ActorLogging {
@@ -44,21 +69,23 @@ class RequestHandler(strategies: Map[String, VariableStrategy]) extends Actor wi
 
     import context.dispatcher
 
-    def receive = receiveInitialRequest
-
-    def receiveInitialRequest = LoggingReceive {
-        case request: VariablesRequest =>
-            val initialResults = request.variables.map { v => v -> Promise[Double]() }.toMap
-            initialResults.foreach { case (v, r) =>
-                results += (v -> r)
-                context.actorOf(Props(new VariableCalculator(v, strategies(v))), v)
+    def receive = LoggingReceive {
+        case VariablesRequest(variables) =>
+            val newResults = mutable.HashMap.empty[String, Promise[Double]]
+            variables.foreach { v =>
+                if (results.contains(v)) {
+                    newResults += (v -> results(v))
+                }
+                else {
+                    val r = Promise[Double]()
+                    results += (v -> r)
+                    newResults += (v -> r)
+                    context.actorOf(Props(new VariableCalculator(v, strategies(v))), v)
+                }
             }
-            allPromises(initialResults) pipeTo context.parent
-            context.become(collectResults)
-    }
-
-    def collectResults = LoggingReceive {
+            newResults.foreach { case (v, r) => r.future.map(VariableResult(v, _)) pipeTo sender }
         case VariableResult(name, value) =>
+            results(name).success(value)
     }
 }
 

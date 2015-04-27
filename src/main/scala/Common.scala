@@ -13,7 +13,7 @@ object Common {
         tryP
     }
 
-    def allPromises[K, V](mp: Map[K, Promise[V]])(implicit ec: ExecutionContext): Future[Map[K, Try[V]]] = async {
+    def allPromises[K, V](mp: scala.collection.Map[K, Promise[V]])(implicit ec: ExecutionContext): Future[scala.collection.Map[K, Try[V]]] = async {
         var entries = mp.toList
         val result = new ListBuffer[(K, Try[V])]()
         while (entries != Nil) {
