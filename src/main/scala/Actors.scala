@@ -91,6 +91,7 @@ class RequestHandler(strategies: Map[String, VariableStrategy]) extends Actor wi
 
 case class VariablesRequest(variables: List[String])
 case class VariableResult(name: String, value: Double)
+case class VariableFailure(name: String)
 
 class VariableCalculator(name: String, strategy: VariableStrategy) extends Actor with ActorLogging {
 
@@ -103,7 +104,10 @@ class VariableCalculator(name: String, strategy: VariableStrategy) extends Actor
         if (strategy.dependencies().nonEmpty) {
             context.parent ! VariablesRequest(strategy.dependencies())
         }
-        strategy.calculate(dependencies).map(VariableResult(name, _)).pipeTo(context.parent)
+        strategy.calculate(dependencies)
+                .map(VariableResult(name, _))
+                .fallbackTo(Future.successful(VariableFailure(name)))
+                .pipeTo(context.parent)
     }
 
     def receive = LoggingReceive {
