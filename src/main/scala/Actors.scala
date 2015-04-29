@@ -2,45 +2,69 @@ import akka.actor._
 import akka.event.LoggingReceive
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
+import akka.io.IO
+
+import spray.can.Http
+import spray.routing.{HttpService, RequestContext}
+import spray.httpx.SprayJsonSupport._
+import spray.httpx.marshalling._
+import spray.json.DefaultJsonProtocol._
 
 import scala.concurrent._
 import scala.concurrent.duration._
 import scala.async.Async.{async, await}
 import scala.util.Try
 import scala.collection.mutable
+import scala.util.Random
 
 import Common._
 
 
 class Actors {
 
+    implicit val system = ActorSystem("RouterActorSystem")
+    val service = system.actorOf(Props[RouterServiceActor], "router-service")
+
     def test(): Unit = {
 
-        val system = ActorSystem("RouterActorSystem")
+        IO(Http) ! Http.Bind(service, "localhost", port = 8080)
 
-        import system.dispatcher
-
-        val strategies = Map[String, VariableStrategy](
-            "V1" -> new V1Strategy(),
-            "V2" -> new StaticVariableStrategy("V2"),
-            "V3" -> new StaticVariableStrategy("V3"),
-            "V4" -> new V4Strategy(),
-            "V5" -> new StaticVariableStrategy("V5"),
-            "V6" -> new StaticVariableStrategy("V6")
-        )
-
-        val requestHandler = system.actorOf(Props(new RequestHandler(strategies)), "request-handler")
-        val resultsCollector = system.actorOf(Props(new ResultsCollector(List("V1", "V2", "V4", "V6"), requestHandler)), "results-collector")
-
-        Thread.sleep(4000)
-
-        system.shutdown()
     }
+
+    def shutdown(): Unit = system.shutdown()
+
+}
+
+class RouterServiceActor extends Actor with ActorLogging with HttpService {
+
+    import context.dispatcher
+    def actorRefFactory = context
+
+    def receive = runRoute {
+        get {
+            path("") { ctx =>
+                val completeCallback = (result: Map[String, Double]) => ctx.complete(marshal(result))
+                val id = Random.nextInt(Int.MaxValue)
+                val requestHandler = context.actorOf(Props(new RequestHandler(strategies)), "request-handler-" + id)
+                val resultsCollector = context.actorOf(Props(new ResultsCollector(List("V1", "V2", "V4", "V6"), requestHandler, completeCallback)), "results-collector-" + id)
+            }
+        }
+    }
+
+    val strategies = Map[String, VariableStrategy](
+        "V1" -> new V1Strategy(),
+        "V2" -> new StaticVariableStrategy("V2"),
+        "V3" -> new StaticVariableStrategy("V3"),
+        "V4" -> new V4Strategy(),
+        "V5" -> new StaticVariableStrategy("V5"),
+        "V6" -> new StaticVariableStrategy("V6")
+    )
+
 }
 
 case object Finished
 
-class ResultsCollector(variables: List[String], requestHandler: ActorRef) extends Actor with ActorLogging {
+class ResultsCollector(variables: List[String], requestHandler: ActorRef, completeCallback: (Map[String, Double]) => Unit) extends Actor with ActorLogging {
 
     val results = mutable.HashMap.empty[String, Double]
 
@@ -57,9 +81,11 @@ class ResultsCollector(variables: List[String], requestHandler: ActorRef) extend
             }
         }
         case Finished =>
-            println(results)
+            completeCallback(results.toMap)
             context.stop(self)
     }
+
+    override def postStop() = println("STOPPED")
 
 }
 
